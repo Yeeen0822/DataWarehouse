@@ -1,4 +1,5 @@
 Project Overview
+
 This project focuses on designing and implementing a data warehouse for analytical processing. It covers key aspects such as data modeling, ETL processes, and business analytics queries.
 
 Key Components
