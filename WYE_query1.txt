@@ -1,0 +1,93 @@
+-- Set the format for the report
+SET linesize 110
+SET pagesize 40
+
+-- Accept the number of previous years for analysis
+ACCEPT NumYears PROMPT 'Enter the number of previous years you want to analyze: '
+
+-- Define the current year and the start year based on user input
+COLUMN PreviousYear NEW_VALUE PreviousYear NOPRINT;
+COLUMN StartYear NEW_VALUE StartYear NOPRINT;
+
+-- Get the current year and calculate the start year
+SELECT TO_NUMBER(TO_CHAR(SYSDATE, 'YYYY')) - 1 AS PreviousYear FROM dual;
+SELECT &PreviousYear - &NumYears + 1 AS StartYear FROM dual;
+
+-- Column formatting
+COLUMN CAL_YEAR FORMAT 9999
+COLUMN Quarter FORMAT A8 HEADING 'QUARTER';
+COLUMN Year1 FORMAT 9999 HEADING 'YEAR1';
+COLUMN SalesYear1 FORMAT $9999,999.99 HEADING 'SALESYEAR1';
+COLUMN SalesYear2 FORMAT $9999,999.99 HEADING 'SALESYEAR2';
+COLUMN AbsoluteGrowth FORMAT $9999,999.99 HEADING 'Absolute|Growth';
+COLUMN GrowthPercentage FORMAT 999.99 HEADING 'Growth %';
+COLUMN ProjectedSales2024 FORMAT $9999,999.99 HEADING 'Projected|Sales 2024';
+COLUMN ProjectedGrowth2024 FORMAT 999.99 HEADING 'Projected|Growth 2024 %';
+
+-- Create or replace the view with a filter for the dynamic year range
+CREATE OR REPLACE VIEW Quarter_SALES AS
+SELECT 
+    D.cal_year,
+    D.cal_quarter,
+    SUM(SF.linetotal) AS TotalQuarterSales,
+    COUNT(SF.orderid) AS TotalTransactions
+FROM salesfact SF
+JOIN Date_dim D ON SF.date_key = D.date_key
+WHERE D.cal_year BETWEEN &StartYear AND &PreviousYear
+GROUP BY D.cal_year, D.cal_quarter;
+
+-- Query for Year-over-Year analysis based on user input
+TTITLE ON
+TTITLE CENTER '====================================================================' SKIP 1 - 
+       CENTER 'Year-over-Year Quarterly Sales Growth Analysis And Projection (2024)' SKIP 1 - 
+       CENTER '====================================================================' SKIP 1 LEFT 'DATE: ' _DATE SKIP 1 LEFT  'PAGE: ' FORMAT 999 SQL.PNO SKIP 1
+
+-- Break on Quarter, AVGSalesPerQuarter and compute the sum of SalesYear1
+BREAK ON Quarter SKIP 1 ON ProjectedSales2024 ON Growth2023to2024
+COMPUTE AVG LABEL 'Average: ' OF SalesYear1 GrowthPercentage AbsoluteGrowth ON Quarter
+
+WITH HistoricalData AS (
+    SELECT 
+        Q.cal_quarter AS Quarter,
+        Q.cal_year AS Year1,
+        Q.TotalQuarterSales AS SalesYear1,
+        LAG(Q.TotalQuarterSales, 1) OVER (PARTITION BY Q.cal_quarter ORDER BY Q.cal_year) AS SalesYear2,
+        Q.TotalQuarterSales - LAG(Q.TotalQuarterSales, 1) OVER (PARTITION BY Q.cal_quarter ORDER BY Q.cal_year) AS AbsoluteGrowth,
+        ((Q.TotalQuarterSales - LAG(Q.TotalQuarterSales, 1) OVER (PARTITION BY Q.cal_quarter ORDER BY Q.cal_year)) 
+        / NULLIF(LAG(Q.TotalQuarterSales, 1) OVER (PARTITION BY Q.cal_quarter ORDER BY Q.cal_year), 0) * 100) AS GrowthPercentage,
+        AVG(Q.TotalQuarterSales) OVER (PARTITION BY Q.cal_quarter) AS AVGSalesPerQuarter
+    FROM Quarter_SALES Q
+    WHERE Q.cal_year BETWEEN &StartYear AND &PreviousYear
+)
+-- Calculate Average Growth Rate for Each Quarter and growth from 2023 to 2024
+, GrowthRates AS (
+    SELECT 
+        Quarter,
+        AVG(GrowthPercentage) AS AvgGrowthRate
+    FROM HistoricalData
+    WHERE GrowthPercentage IS NOT NULL
+    GROUP BY Quarter
+)
+-- Project Future Sales for 2024 and calculate growth percentage from 2023 to 2024
+SELECT 
+    H.Quarter,
+    H.Year1,
+    H.SalesYear1,
+    H.SalesYear2,
+    H.AbsoluteGrowth,
+    H.GrowthPercentage,
+    H.AVGSalesPerQuarter * (1 + G.AvgGrowthRate / 100) AS ProjectedSales2024,
+    CASE
+        WHEN H.Year1 = &PreviousYear THEN
+            ROUND((H.AVGSalesPerQuarter * (1 + G.AvgGrowthRate / 100) - H.SalesYear1) / NULLIF(H.SalesYear1, 0) * 100,2)
+        ELSE
+            NULL
+    END AS ProjectedGrowth2024
+FROM HistoricalData H
+JOIN GrowthRates G ON H.Quarter = G.Quarter
+ORDER BY H.Quarter, H.Year1;
+
+CLEAR COLUMNS
+CLEAR BREAKS
+CLEAR COMPUTE
+TTITLE OFF;

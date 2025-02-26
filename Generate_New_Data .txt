@@ -1,0 +1,314 @@
+-- GENERATE MORE DATA USING CODE (CUSTOMER)
+DROP TABLE TEMP_CUST;
+create table temp_cust as
+select * from customer; 
+---------------------------------------------------------------------
+insert into temp_cust
+ select * from temp_cust;
+select count(*) from temp_cust;
+---------------------------------------------------------------------
+--Repeat until we have 11k records
+--   COUNT(*)
+-- ----------
+--    12800
+---------------------------------------------------------------------
+DROP TABLE new_orders;
+DROP TABLE NEW_CUST;
+
+create table new_cust 
+( 
+  CustID       NUMBER NOT NULL, 
+  CustName     VARCHAR(30) NOT NULL, 
+  CustContact  CHAR(12), 
+  CustEmail    VARCHAR(30), 
+  CustCity     VARCHAR(20), 
+  CustState    VARCHAR(20), 
+  Constraint PK_newCustID PRIMARY KEY (CustID)
+);
+---------------------------------------------------------------------
+drop sequence customer_seq;
+create sequence customer_seq
+	start with 100001
+	increment by 1;
+
+insert into new_cust 
+select 
+	customer_seq.nextval,                
+ 	substr(CustName,1,18)||'-'||customer_seq.currval,                        
+	CustContact,                   
+ 	CustEmail,    
+  	CustCity,    
+  	CustState                                      
+from temp_cust;
+
+
+-- MIN(CUSTID) MAX(CUSTID)
+-- ----------- -----------
+--     100001      112800
+
+---------------------------------------------------------------------
+select min(custID),max(custID) from new_cust;
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+--ORDERS
+-----------
+
+CREATE TABLE new_orders
+(
+    OrderID       NUMBER NOT NULL, 
+    OrderDate     DATE NOT NULL, 
+    PromoID       NUMBER, 
+    CustID        NUMBER, 
+    DeliveryID    NUMBER,
+    PRIMARY KEY (OrderID),
+    CONSTRAINT FK_newPromoID FOREIGN KEY (PromoID) REFERENCES Promotions(PromoID),
+    CONSTRAINT FK_newCustID FOREIGN KEY (CustID) REFERENCES new_cust(CustID),
+    CONSTRAINT FK_newDeliveryID FOREIGN KEY (DeliveryID) REFERENCES DeliveryCompany(CompanyID)
+);
+
+---------------------------------------------------------------------
+DROP SEQUENCE orderID_seq;
+CREATE SEQUENCE orderID_seq
+  START WITH 100001
+  INCREMENT BY 1;
+---------------------------------------------------------------------
+
+SET SERVEROUTPUT ON 
+DECLARE
+  startDate       DATE := TO_Date('01/07/2014', 'dd/mm/yyyy');
+  endDate         DATE := TO_Date('30/06/2024', 'dd/mm/yyyy');
+  v_orderID       NUMBER;
+  v_promoID       NUMBER;
+  v_custID        NUMBER;
+  v_orderdate     DATE;
+  v_max_orders    NUMBER;
+  v_use_promo     NUMBER;
+  v_deliveryID    NUMBER;
+  rec_count       NUMBER := 0;
+
+BEGIN
+  WHILE (startDate <= endDate) LOOP
+    v_max_orders := TRUNC(DBMS_RANDOM.VALUE(15, 61));
+    FOR ctr IN 1..v_max_orders LOOP
+      v_orderID := orderID_seq.NEXTVAL;
+      v_custID := TRUNC(DBMS_RANDOM.VALUE(100001, 112801));
+      v_orderdate := startDate + ROUND(DBMS_RANDOM.VALUE(0.420, 0.905), 3); 
+      -- Randomly decide whether to assign a valid PromoID or 0 with a lower chance for 0
+      v_use_promo := CASE
+                       WHEN DBMS_RANDOM.VALUE(0, 1) < 0.2 THEN 0 -- 2% chance for 0
+                       ELSE 1 -- 98% chance to assign a valid PromoID
+                     END;
+
+      IF v_use_promo = 1 THEN
+        BEGIN
+          -- Attempt to select a valid PromoID based on the order date
+          SELECT PromoID INTO v_promoID
+          FROM Promotions
+          WHERE v_orderdate BETWEEN TO_DATE(PromoStartDate, 'dd/mm/yyyy') AND TO_DATE(PromoEndDate, 'dd/mm/yyyy')
+            AND PromoID > 0 -- Assuming valid PromoID values start from 1
+            AND ROWNUM = 1;
+
+        EXCEPTION
+          WHEN NO_DATA_FOUND THEN
+            v_promoID := 0; -- If no promotion is found, set PromoID to 0
+        END;
+      ELSE
+        -- Assign PromoID as 0 directly
+        v_promoID := 0;
+      END IF;
+
+      -- Generate DeliveryID with a controlled distribution
+      v_deliveryID := CASE
+                        WHEN DBMS_RANDOM.VALUE(0, 1) < 0.2 THEN 0 -- 20% chance for 0
+                        ELSE TRUNC(DBMS_RANDOM.VALUE(1, 11)) -- 1 to 10 for other cases
+                      END;
+
+      -- Insert the data into the new_orders table
+      INSERT INTO new_orders (OrderID, OrderDate, PromoID, CustID, DeliveryID)
+      VALUES (v_orderID, v_orderdate, v_promoID, v_custID, v_deliveryID);
+
+      rec_count := rec_count + 1; -- Increment rec_count
+    END LOOP;
+    startDate := startDate + INTERVAL '1' DAY;
+  END LOOP;
+
+  DBMS_OUTPUT.PUT_LINE('Total number: ' || rec_count); -- Output the final count
+END;
+/
+
+-- 100K
+SELECT COUNT(*) FROM NEW_ORDERS;
+
+-- TO CHECK WHETHER THE ORDER DATE IS WITHIN PROMOTION'S PERIOD
+select orderid, to_char(orderdate, 'dd/mm/yyyy hh24:mi') ORDERDATE, promoid from new_orders where trunc(orderdate) = '01/02/2024';
+
+-- TO SEE THE USAGE QTY OF EACH PROMOTION BY NEW_ORDERS
+select promoid, count(*) as qty from new_orders group by promoid order by qty desc;
+
+--------------------------
+-----ORDER DETAILS--------
+--------------------------
+
+
+--Generate data for order_details
+============================
+--for each order -- 1 to 5 items
+   --for each item -- 1 to 10 quantities
+
+drop table temp_order_details;
+create table temp_order_details
+(rec_no        NUMBER,
+ OrderID       NUMBER,
+ MenuID        NUMBER,
+ Quantity      NUMBER,
+ SellingPrice  NUMBER(4,2)
+);
+
+SET SERVEROUTPUT ON 
+
+
+declare
+   cursor order_cur is
+     select OrderID from new_orders;
+ 
+   order_rec order_cur%ROWTYPE;
+
+   COUNTER         number:=0;
+   v_no_of_items   number(1);
+   v_MenuID        number;
+   v_Quantity      number(2);
+   v_SellingPrice  number(4,2);
+
+begin
+   for order_rec IN order_cur loop
+
+      v_no_of_items:=TRUNC(dbms_random.value(1,6));
+
+      for ctr in 1..v_no_of_items loop
+         counter:=counter+1;
+
+         v_MenuID :=TRUNC(dbms_random.value(1,41));    
+         v_Quantity:=TRUNC(dbms_random.value(1,11));      
+         select Unitprice INTO v_SellingPrice  
+         from Menu
+         where menuID=v_MenuID;
+
+         insert into temp_order_details values(
+               counter, 
+               order_rec.orderid,
+               v_MenuID,
+               v_SellingPrice,
+               v_quantity);
+      end loop;
+   end loop;
+dbms_output.put_line('Count is '||counter);
+end;
+/
+--EG:412878
+select count(*) from temp_order_details;
+
+--EG:399415
+select count(distinct(OrderID||menuID)) No_DUP
+from temp_order_details;
+
+-- Remove duplicate orderID, menuID
+-- identify all orders with duplicate menuID
+-- store to another temp table
+
+drop table chk_duplicate;
+create table chk_duplicate as
+   select rec_no,
+          orderid|| '-' ||MenuID as Ord_Menu
+   from temp_order_details
+   where orderid IN
+         (Select orderid
+          from temp_order_details
+          group by orderid
+           having count(MenuID)>count(distinct MenuID)
+         )
+   order by Ord_Menu; 
+
+--EG 54515 ROWS
+select count(*) from chk_duplicate;
+
+desc chk_duplicate
+
+col Ord_Menu format a20
+
+select * from chk_duplicate
+order by 1;
+
+
+
+-- capture the rec_no to identify which row to delete
+drop table delete_dup_row;
+create table delete_dup_row
+(recNumber number);
+
+
+
+-- compare each record to identify duplicated rows
+declare
+   cursor duplicate_cur is
+      select * from chk_duplicate;
+
+   v_rec_no  number;
+   v_ordDetails1 varchar(80);
+   v_ordDetails2 varchar(80);
+
+begin
+   open duplicate_cur; -- load data to memory
+   fetch duplicate_cur INTO v_rec_no, v_ordDetails1; -- read first row
+   LOOP
+      fetch duplicate_cur INTO v_rec_no, v_ordDetails2; -- read next row
+      EXIT WHEN duplicate_cur%NOTFOUND;
+
+      if (v_ordDetails1=v_ordDetails2) then
+         insert into delete_dup_row values(v_rec_no);
+      else
+         v_ordDetails1:=v_ordDetails2;
+      end if;
+   END LOOP;     
+   close duplicate_cur; -- free the memory space
+end;
+/
+
+--EG:13463
+select count(*) from delete_dup_row;
+
+select * from delete_dup_row
+order by 1;
+
+-- CAN CHANGE UR SELF,BASED ON OUTPUT FROM THE CODE ABOVE
+select orderID
+from temp_Order_details
+where rec_no in (418942, 418943);
+
+
+--CAN CHANGE URSELF NOT MUST 239129, BASED ON OUTPUT FROM THE CODE ABOVE
+select orderid, menuid, quantity
+from temp_order_details
+where orderid in (239894)
+order by 1,2;
+
+--HAVE THE SAME NUMBER OF RECORDS EG:13463 FROM THE DELETE_DUP_ROW
+delete temp_order_details
+where rec_no in (select * 
+                 from delete_dup_row);
+
+drop table new_orderDetails;
+
+create table new_orderDetails as
+select * from orderDetails;
+
+delete new_orderDetails;
+
+
+insert into new_orderDetails
+select ORDERID, 
+       MENUID, 
+       SellingPrice, 
+       QUANTITY
+from temp_order_details;
+
+-- 399415
+

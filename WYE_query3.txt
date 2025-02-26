@@ -1,0 +1,68 @@
+SET PAGESIZE 50
+SET LINESIZE 70
+SET VERIFY OFF
+ALTER SESSION SET NLS_DATE_FORMAT = 'DD/MM/YYYY';
+
+COLUMN cal_year FORMAT 9999 HEADING 'YEAR'
+COLUMN avg_non_nyd_sales FORMAT $999,999.99 HEADING 'AVG|NON-NYD|SALES'
+COLUMN nyd_sales FORMAT $999,999.99 HEADING 'NEW YEAR|SALES'
+COLUMN SALES_DIFFERENCE FORMAT $999,999.99  HEADING 'SALES|DIFFERENCE'
+COLUMN perct_of_nyd_to_non_nyd FORMAT 999.99 HEADING '(%)|NYD to|Non-NYD'
+
+-- Prompt for input to specify how many years of data to analyze
+ACCEPT num_years NUMBER PROMPT 'Enter the number of years to analyze: '
+
+TTITLE ON
+TTITLE CENTER '===========================================' SKIP 1 -
+       CENTER '  NEW YEAR VS NON-NEW YEAR SALES ANALYSIS ' SKIP 1 -
+       CENTER '  TO DETERMINE OPEN/CLOSE NEXT YEAR' SKIP 1 -
+       CENTER '===========================================' SKIP 1 LEFT 'DATE: ' _DATE SKIP 1 LEFT  'PAGE: ' FORMAT 999 SQL.PNO SKIP 1
+
+WITH SALES_DATASET AS (
+    SELECT
+        D.CAL_YEAR,
+        CASE 
+            WHEN TO_CHAR(D.CAL_DATE, 'MM-DD') = '01-01' THEN 'New Year' 
+            ELSE 'Non-New Year' 
+        END AS SEASON_TYPE,
+        COUNT(DISTINCT d.date_key) AS NUM_OF_DAYS,
+        SUM(SF.LINETOTAL) AS total_sales
+    FROM SALESFACT SF
+    JOIN DATE_DIM D 
+        ON SF.date_key = D.date_key
+    WHERE D.CAL_YEAR BETWEEN (EXTRACT(YEAR FROM TRUNC(SYSDATE)) - &num_years + 1) AND EXTRACT(YEAR FROM TRUNC(SYSDATE))
+    GROUP BY D.CAL_YEAR, 
+             CASE 
+                 WHEN TO_CHAR(D.CAL_DATE, 'MM-DD') = '01-01' THEN 'New Year' 
+                 ELSE 'Non-New Year' 
+             END
+),
+COMPARE AS (
+    SELECT
+        CAL_YEAR,
+        MAX(CASE WHEN SEASON_TYPE = 'New Year' THEN total_sales ELSE NULL END) AS NYD_SALES,
+        AVG(CASE WHEN SEASON_TYPE = 'Non-New Year' THEN total_sales / NUM_OF_DAYS ELSE NULL END) AS AVG_NON_NYD_SALES,
+        MAX(CASE WHEN SEASON_TYPE = 'Non-New Year' THEN NUM_OF_DAYS ELSE NULL END) AS NON_NYD_DAYS
+    FROM SALES_DATASET
+    GROUP BY CAL_YEAR
+)
+SELECT
+    CAL_YEAR,
+    NYD_SALES,
+    AVG_NON_NYD_SALES,
+    (NYD_SALES - AVG_NON_NYD_SALES) AS SALES_DIFFERENCE,
+    CASE
+        WHEN AVG_NON_NYD_SALES = 0 THEN 0
+        ELSE ROUND(
+            (((NYD_SALES - AVG_NON_NYD_SALES)/ AVG_NON_NYD_SALES) * 100), 2
+        )
+    END AS perct_of_nyd_to_non_nyd,
+    CASE
+        WHEN (((NYD_SALES - AVG_NON_NYD_SALES)/ AVG_NON_NYD_SALES) * 100) > 50 THEN 'Consider Open'
+        ELSE 'Consider Close'
+    END AS SUGGESTION
+FROM COMPARE
+ORDER BY CAL_YEAR;
+
+CLEAR COLUMNS
+TTITLE OFF;

@@ -1,0 +1,775 @@
+﻿drop table salesFact;
+
+
+-- PROMOTION DIMENSION SEQUENCE
+
+
+drop sequence promotion_dim_seq;
+create sequence promotion_dim_seq
+  start with 1001;
+
+
+-- 1.2 PHYSICAL DESIGN
+– PROMOTION DIMENSION 
+Drop table promotion_dim;
+Create table promotion_dim
+(promo_key       NUMBER        NOT NULL,
+ promoID         NUMBER        NOT NULL,
+ promoName       VARCHAR(40)   NOT NULL,
+ promoStartDate  DATE          NOT NULL,
+ promoEndDate    DATE          NOT NULL,
+ promoPercentage NUMBER        NOT NULL,
+ promoCategory   VARCHAR(15)   NOT NULL,
+ Constraint PK_promo_key primary key(promo_key)
+ );
+
+
+-- INITIAL LOADING
+insert into promotion_dim
+Select promotion_dim_seq.nextval,
+       p.promoID,
+       UPPER(p.promoName),
+       P.promoStartDate,
+       P.promoEndDate,
+       P.promoPercentage,
+       UPPER(C.CategoryName)
+FROM promotions P
+Join promoCategory C on P.promoCategoryID = C.promoCategoryID;
+
+
+
+
+
+INSERT INTO Promotions VALUES (PromoID_seq.nextval,'Black Friday2 2024', '09/10/2024', '11/10/2024', 0.3, 1);
+
+-- Drop the procedure if it already exists
+DROP PROCEDURE Prod_Insert_Promotion_Dim;
+
+-- Create or replace the procedure with advanced scrubbing features
+CREATE OR REPLACE PROCEDURE Prod_Insert_Promotion_Dim IS
+BEGIN
+    -- Begin a transaction
+    BEGIN
+        -- Insert data into the promotion_dim table with advanced scrubbing
+        INSERT INTO promotion_dim (promo_key, promoID, promoName, promoStartDate, promoEndDate, promoPercentage, promoCategory)
+        SELECT promotion_dim_seq.NEXTVAL,
+               p.promoID,
+               UPPER(TRIM(p.promoName)),
+               p.promoStartDate,
+               p.promoEndDate,
+               p.promoPercentage,
+               UPPER(TRIM(c.CategoryName))
+        FROM promotions p
+        JOIN promoCategory c ON p.promoCategoryID = c.promoCategoryID
+        WHERE p.promoID NOT IN (
+          SELECT promoID FROM promotion_dim
+        )
+        AND p.promoStartDate IS NOT NULL
+        AND p.promoEndDate IS NOT NULL
+        AND p.promoStartDate <= p.promoEndDate
+        AND p.promoPercentage >= 0
+        AND TRIM(p.promoName) IS NOT NULL
+        AND TRIM(c.CategoryName) IS NOT NULL;
+
+        -- Commit the transaction
+        COMMIT;
+
+        -- Log successful insertion
+        DBMS_OUTPUT.PUT_LINE('Promotion data inserted successfully.');
+
+    EXCEPTION
+        -- Handle any errors that occur during the insert
+        WHEN OTHERS THEN
+            -- Rollback the transaction in case of error
+            ROLLBACK;
+            -- Log the error
+            DBMS_OUTPUT.PUT_LINE('Error inserting promotion data: ' || SQLERRM);
+            -- Optionally, you could insert errors into an error log table or send notifications
+            -- INSERT INTO error_log (error_message, error_time) VALUES (SQLERRM, SYSDATE);
+    END;
+END;
+/
+
+-- Execute the procedure
+EXEC Prod_Insert_Promotion_Dim;
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+–MENU DIMENSION
+—- menu dimension sequence
+drop sequence menu_dim_seq;
+create sequence menu_dim_seq
+  start with 1001;
+–CREATE TABLE
+Drop table menu_dim;
+Create table menu_dim
+(menu_key      NUMBER        NOT NULL,
+ menuID        NUMBER        NOT NULL,
+ menuName      VARCHAR(40)   NOT NULL,
+ categoryName  VARCHAR(15)   NOT NULL,
+ Constraint PK_menu_key primary key(menu_key)
+ );
+
+--INITIAL LOADING(MENU_DIM)
+insert into menu_dim
+Select menu_dim_seq.nextval,
+       M.menuID,
+       UPPER(M.ItemName),
+       UPPER(C.CategoryName)
+FROM menu M
+Join menuCategory C on M.menuCategoryID = C.menuCategoryID;
+
+--SUBSEQUENT LOADING(MENU_DIM)
+DROP PROCEDURE Prod_Insert_Menu_Dim;
+CREATE OR REPLACE PROCEDURE Prod_Insert_Menu_Dim IS
+    v_null_value_count NUMBER := 0;
+    v_invalid_length_count NUMBER := 0;
+    v_rows_inserted NUMBER := 0;  -- Variable to store the count of inserted rows
+BEGIN
+    -- Step 1: Check for NULL or empty values in critical fields
+    SELECT COUNT(*) INTO v_null_value_count
+    FROM menu M
+    JOIN menuCategory C ON M.menuCategoryID = C.menuCategoryID
+    WHERE M.menuID IS NULL 
+       OR TRIM(M.ItemName) IS NULL 
+       OR TRIM(C.CategoryName) IS NULL;
+
+
+    IF v_null_value_count > 0 THEN
+        DBMS_OUTPUT.PUT_LINE('Error: NULL values found in critical fields');
+        -- Optionally log this to a table or handle as required
+        RETURN;
+    END IF;
+
+
+    -- Step 2: Check for invalid lengths (e.g., menuName exceeding 40 characters)
+    SELECT COUNT(*) INTO v_invalid_length_count
+    FROM menu M
+    WHERE LENGTH(TRIM(M.ItemName)) > 40;
+
+
+    IF v_invalid_length_count > 0 THEN
+        DBMS_OUTPUT.PUT_LINE('Error: Invalid length in Menu Name');
+        -- Optionally log this to a table or handle as required
+        RETURN;
+    END IF;
+
+
+    -- Step 3: Insert the valid data, ensuring no duplicate entries
+    INSERT INTO menu_dim (menu_key, menuID, menuName, categoryName)
+    SELECT menu_dim_seq.NEXTVAL,
+           M.menuID,
+           UPPER(TRIM(M.ItemName)),   -- Trim and convert to uppercase for consistency
+           UPPER(TRIM(C.CategoryName))
+    FROM menu M
+    JOIN menuCategory C ON M.menuCategoryID = C.menuCategoryID
+    WHERE NOT EXISTS (
+        SELECT 1 FROM menu_dim WHERE menu_dim.menuID = M.menuID
+    )
+    AND LENGTH(TRIM(M.ItemName)) <= 40;  -- Ensure valid length constraint
+
+
+    -- Step 4: Capture the number of rows inserted
+    v_rows_inserted := SQL%ROWCOUNT;
+
+
+    -- Step 5: Log the number of rows inserted
+    DBMS_OUTPUT.PUT_LINE(v_rows_inserted || ' row(s) successfully inserted into menu_dim.');
+
+
+END;
+/
+
+--check insertion
+--INSERT INTO Menu VALUES (MenuID_seq.nextval,'Kopi K', '3.1', 'Strong black coffee commonly enjoyed in Malaysia.', 1);
+
+EXEC Prod_Insert_Menu_Dim
+
+
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+--CUSTOMER DIMENSION
+drop table customer_dim;
+create table customer_dim
+(customer_key       number not null,
+  CustID            number NOT NULL,
+  CustName          VARCHAR(30) NOT NULL, 
+  CustCity          VARCHAR(20), 
+  CustState         VARCHAR(20),
+  RowEffectiveDate  Date    DEFAULT DATE '2014-06-01' NOT NULL,
+  RowExpirationDate Date    DEFAULT DATE '9999-12-31' NOT NULL,
+  isCurrent         Char(1) DEFAULT 'Y' NOT NULL, --Y/N
+constraint PK_Cust_key primary key (customer_key)
+);
+
+--INITIAL LOADING(CUSTOMER_DIM)
+
+drop sequence cust_dim_seq;
+create sequence cust_dim_seq
+   start with 1001;
+
+INSERT INTO customer_dim (customer_key, CustID, CustName, CustCity, CustState)
+SELECT cust_dim_seq.NEXTVAL, 
+       CUSTID,      
+       UPPER(CustName),             
+       UPPER(CustCity),
+       UPPER(CustState)
+FROM new_cust;
+	
+DROP SEQUENCE dob_seq;
+CREATE SEQUENCE dob_seq
+  START WITH 1001;
+
+DROP TABLE DOB_data;
+CREATE TABLE DOB_data (
+    record_id NUMBER NOT NULL,
+    birth_date DATE,
+    PRIMARY KEY(record_id)
+);
+
+DECLARE
+    startdate DATE := TO_DATE('01/01/1954', 'dd/mm/yyyy');
+    enddate DATE := TO_DATE('01/01/2003', 'dd/mm/yyyy');
+BEGIN
+    WHILE startdate <= enddate LOOP
+        INSERT INTO DOB_data (record_id, birth_date)
+        VALUES (dob_seq.NEXTVAL, startdate);
+        startdate := startdate + 1;
+    END LOOP;
+END;
+/
+
+-- Ensure the customer_dim table is ready for updates
+ALTER TABLE customer_dim
+    ADD (dob DATE DEFAULT TO_DATE('01/01/1999', 'dd/mm/yyyy'),
+         gender CHAR(1) DEFAULT 'M');
+
+-- Initial update of DOB and Gender
+DECLARE
+    CURSOR cust_cur IS
+        SELECT customer_key FROM customer_dim;
+    
+    offset1 NUMBER;
+    offset2 NUMBER;
+    v_gender CHAR(1);
+    
+BEGIN
+    FOR cust_rec IN cust_cur LOOP
+        v_gender := 'M';
+        offset1 := TRUNC(DBMS_RANDOM.VALUE(1002, 12000));
+        offset2 := TRUNC(DBMS_RANDOM.VALUE(3000, 18900));
+        
+        IF MOD(offset1, 7) < 4 THEN
+            v_gender := 'F';
+        END IF;
+        
+        -- Use a single update statement with a subquery
+        UPDATE customer_dim
+        SET dob = (
+            SELECT birth_date
+            FROM DOB_data
+            WHERE record_id = TRUNC(DBMS_RANDOM.VALUE(offset1, offset2))
+        ),
+        gender = v_gender
+        WHERE customer_key = cust_rec.customer_key;
+        
+    END LOOP;
+END;
+/
+
+
+CREATE OR REPLACE PROCEDURE proc_sub_loading_cust AS
+    v_rows_inserted NUMBER;  -- Variable to store the count of inserted rows
+BEGIN
+    -- Insert New Customers Only with Scrubbing Logic
+    INSERT INTO customer_dim (customer_key, CustID, CustName, CustCity, CustState, RowEffectiveDate, RowExpirationDate, isCurrent)
+    SELECT 
+        cust_dim_seq.NEXTVAL, 
+        CUSTID, 
+        UPPER(NVL(TRIM(CustName), 'UNKNOWN')),               -- Scrubbing: Replace empty or NULL CustName with 'UNKNOWN'
+        UPPER(NVL(TRIM(CustCity), 'UNKNOWN CITY')),          -- Scrubbing: Replace empty or NULL CustCity with 'UNKNOWN CITY'
+        UPPER(NVL(TRIM(CustState), 'UNKNOWN STATE')),        -- Scrubbing: Replace empty or NULL CustState with 'UNKNOWN STATE'
+        SYSDATE, 
+        TO_DATE('9999-12-31', 'yyyy-mm-dd'), 
+        'Y'
+    FROM new_cust nc
+    WHERE NOT EXISTS (
+        SELECT 1 
+        FROM customer_dim cd 
+        WHERE cd.CustID = nc.CustID 
+        AND cd.isCurrent = 'Y'
+    )
+    AND CUSTID IS NOT NULL                                    -- Scrubbing: Ensure CustID is not NULL
+    AND REGEXP_LIKE(CUSTID, '^\d+$')                          -- Scrubbing: Ensure CustID is a valid number (only digits)
+    AND LENGTH(TRIM(CustName)) > 0                            -- Scrubbing: Ensure CustName is not blank after trimming
+    AND LENGTH(TRIM(CustCity)) > 0                            -- Scrubbing: Ensure CustCity is not blank after trimming
+    AND LENGTH(TRIM(CustState)) > 0;                          -- Scrubbing: Ensure CustState is not blank after trimming
+    
+    -- Get the number of rows inserted
+    v_rows_inserted := SQL%ROWCOUNT;
+    
+    -- Provide feedback based on the number of rows inserted
+    IF v_rows_inserted > 0 THEN
+        DBMS_OUTPUT.PUT_LINE(v_rows_inserted || ' new rows were successfully inserted into customer_dim.');
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('No new rows were inserted. All records already exist or are invalid.');
+    END IF;
+    
+    -- Commit the changes
+    COMMIT;
+END proc_sub_loading_cust;
+/
+
+INSERT INTO new_cust VALUES (customer_seq.nextval,'Choong Yam En' , '019-012 3456','en@gmail.com' , 'Setapak', 'Wilayah Persekutuan');
+EXEC proc_sub_loading_cust;
+
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+--SLOWLY CHANGING DIMENSION
+CREATE OR REPLACE PROCEDURE update_customer_city_with_date (
+    p_CustID      IN customer_dim.CustID%TYPE,   -- Customer ID as input
+    p_newCity     IN customer_dim.CustCity%TYPE, -- New city name as input
+    p_updateDate  IN DATE                        -- Update date as input
+)
+IS
+    v_customer_key customer_dim.customer_key%TYPE;
+BEGIN
+    -- Find the current active record for the customer
+    SELECT customer_key INTO v_customer_key
+    FROM customer_dim
+    WHERE CustID = p_CustID
+      AND isCurrent = 'Y'
+      FOR UPDATE;
+      
+    -- Update the current record to expire the day before the update date
+    UPDATE customer_dim
+    SET RowExpirationDate = p_updateDate - 1,
+        isCurrent = 'N'
+    WHERE customer_key = v_customer_key;
+    -- Insert a new record with the updated city and new effective/expiration dates
+    INSERT INTO customer_dim (
+        customer_key,
+        CustID,
+        CustName,
+        CustCity,
+        CustState,
+        DOB,
+        GENDER,
+        RowEffectiveDate,
+        RowExpirationDate,
+        isCurrent
+    )
+    SELECT
+        cust_dim_seq.NEXTVAL,   -- New customer_key from sequence
+        CustID,
+        CustName,
+        UPPER(p_newCity),       -- New city name in uppercase
+        CustState,
+        DOB,
+        GENDER,
+        p_updateDate,           -- New record's effective date
+        TO_DATE('31/12/9999', 'DD/MM/YYYY'), -- New record's expiration date
+        'Y'                     -- Mark the new record as current
+    FROM customer_dim
+    WHERE customer_key = v_customer_key;
+    
+    -- Commit the changes
+    COMMIT;
+    DBMS_OUTPUT.PUT_LINE('Customer city updated successfully.');
+    
+EXCEPTION
+    -- Handle errors, e.g., customer not found or other exceptions
+    WHEN NO_DATA_FOUND THEN
+        DBMS_OUTPUT.PUT_LINE('Error: Customer with CustID ' || p_CustID || ' not found or has no active record.');
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Error: ' || SQLERRM);
+        ROLLBACK;
+END update_customer_city_with_date;
+/
+
+
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+--INSERT NEW ROW(SCD)
+EXEC update_customer_city_with_date(100001, 'WANGSA MAJU', to_date('22/08/2020','dd/mm/yyyy'))
+
+EXEC update_customer_city_with_date(100002, 'CHERAS', to_date('23/09/2020','dd/mm/yyyy'))
+
+EXEC update_customer_city_with_date(100003, 'AMPANG', to_date('24/10/2020','dd/mm/yyyy'))
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+
+select gender,
+        count(*)
+from customer_dim
+group by Gender;
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------------
+
+
+select TRUNC(months_between(sysdate,dob)/12) AGE,
+        count(*)
+from customer_dim
+group by TRUNC(months_between(sysdate,dob)/12)
+order by AGE;
+
+
+select min (dob), max(dob) from customer_dim;
+
+
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------
+1. CREATE DATE_DIM
+------------------------------------------------------------------------------------------------------------------
+drop table Date_dim;
+create table Date_dim
+(date_key            number not null, -- running number
+ cal_date            date not null,   -- all the dates in the calendar
+ full_desc           varchar(40),     -- spelling description of date
+ day_of_week         number(1),       -- 1 to 7
+ month_name          varchar(9),      -- 'January' to 'December'
+ cal_month_year      number(2),       -- 1 to 12
+ cal_year_month      char(7),      -- e.g. '2024-07'
+ cal_quarter         char(2),         -- 'Q1' to 'Q4'
+ cal_year_quarter    char(7),         -- e.g. '2024-Q1'
+ cal_year            number(4),
+ weekday_ind         char(1),         -- 'Y'/'N'
+constraint PK_date_key primary key(date_key)
+);
+------------------------------------------------------------------------------------------------------------------
+2. VIEW TO CHECK INVALID VALUES OF DATE_DIM
+------------------------------------------------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_invalid_dates AS
+SELECT *
+FROM Date_dim
+WHERE cal_date IS NULL
+   OR day_of_week NOT BETWEEN 1 AND 7
+   OR cal_month_year NOT BETWEEN 1 AND 12
+   OR weekday_ind IS NULL;
+------------------------------------------------------------------------------------------------------------------
+3. CREARE DATE_SEQ
+------------------------------------------------------------------------------------------------------------------
+drop sequence date_seq;
+create sequence date_seq
+  start with 100001
+  increment by 1;
+------------------------------------------------------------------------------------------------------------------
+4. PROCEDURE FOR INITIAL LOADING OF DATE DIMENSION
+------------------------------------------------------------------------------------------------------------------
+SET SERVEROUTPUT ON
+DROP PROCEDURE prc_initial_load_date_dim;
+
+
+CREATE OR REPLACE PROCEDURE prc_initial_load_date_dim AS
+BEGIN
+  DECLARE 
+    startDate DATE := TO_DATE('01/07/2014','DD/MM/YYYY');
+    endDate DATE := TO_DATE('30/06/2024','DD/MM/YYYY');
+    v_CAL_DATE DATE;
+    v_FULL_DESC VARCHAR2(40);
+    v_DAY_OF_WEEK NUMBER(1);
+    v_MONTH_NAME VARCHAR2(9);
+    v_CAL_MONTH_YEAR NUMBER(2);
+    v_CAL_YEAR_MONTH CHAR(7);      
+    v_CAL_QUARTER CHAR(2);
+    v_CAL_YEAR_QUARTER CHAR(7);
+    v_CAL_YEAR NUMBER(4);
+    v_WEEKDAY_IND CHAR(1);
+
+
+  BEGIN
+    WHILE (startDate <= endDate) LOOP
+      v_CAL_DATE := startDate;
+      v_FULL_DESC := TO_CHAR(startDate, 'DD') || ' Of ' ||
+                     TO_CHAR(startDate, 'Month') || ' ' ||
+                     TO_CHAR(startDate, 'Year');
+      v_DAY_OF_WEEK := TO_CHAR(startDate, 'D');
+      v_MONTH_NAME        := to_char(startDate,'MONTH');
+      v_CAL_MONTH_YEAR    := to_char(startDate,'MM');
+      v_CAL_QUARTER := 'Q' || TO_CHAR(startDate, 'Q');
+      v_CAL_YEAR := TO_CHAR(startDate, 'YYYY');
+      v_CAL_YEAR_MONTH := v_CAL_YEAR || '-' || v_CAL_MONTH_YEAR;
+      v_CAL_YEAR_QUARTER := v_CAL_YEAR || '-' || v_CAL_QUARTER;
+
+
+      IF (v_DAY_OF_WEEK BETWEEN 2 AND 6) THEN
+        v_WEEKDAY_IND := 'Y';
+      ELSE 
+        v_WEEKDAY_IND := 'N';
+      END IF;        
+
+
+      -- Additional data validation (scrubbing)
+      IF v_CAL_DATE IS NULL OR v_CAL_YEAR < 2014 THEN
+        DBMS_OUTPUT.PUT_LINE('Invalid date detected: ' || v_CAL_DATE);
+        CONTINUE;
+      END IF;
+
+
+      -- Insert data into Date_dim table
+      BEGIN
+        INSERT INTO Date_dim VALUES (
+          date_seq.NEXTVAL,                  
+          v_CAL_DATE,        
+          v_FULL_DESC,         
+          v_DAY_OF_WEEK, 
+          v_MONTH_NAME,                   
+               v_CAL_MONTH_YEAR,        
+          v_CAL_YEAR_MONTH,                 
+          v_CAL_QUARTER,
+          v_CAL_YEAR_QUARTER, 
+          v_CAL_YEAR,                
+          v_WEEKDAY_IND
+        );
+      EXCEPTION
+        WHEN OTHERS THEN
+          DBMS_OUTPUT.PUT_LINE('Error occurred while inserting data: ' || SQLERRM);
+          ROLLBACK;
+      END;
+
+
+      -- Increment the start date
+      startDate := startDate + 1;
+
+
+    END LOOP;
+  END;
+
+
+  DBMS_OUTPUT.PUT_LINE('ETL process completed successfully.');
+END;
+/
+
+
+EXEC prc_initial_load_date_dim;
+
+
+------------------------------------------------------------------------------------------------------------------
+select count(*) from date_dim;
+select * from date_dim;
+------------------------------------------------------------------------------------------------------------------
+5. Query the View to check for any invalid records.
+------------------------------------------------------------------------------------------------------------------
+SELECT * FROM v_invalid_dates;
+------------------------------------------------------------------------------------------------------------------
+6.
+--------------------------------------------------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE prc_subsequent_load_date_dim AS
+  v_CAL_DATE DATE;
+  v_FULL_DESC VARCHAR2(40);
+  v_DAY_OF_WEEK NUMBER(1);
+  v_MONTH_NAME  varchar(9);
+  v_CAL_MONTH_YEAR NUMBER(2);
+  v_CAL_YEAR_MONTH CHAR(7); 
+  v_CAL_QUARTER CHAR(2);
+  v_CAL_YEAR_QUARTER CHAR(7);
+  v_CAL_YEAR NUMBER(4);
+  v_WEEKDAY_IND CHAR(1);
+  new_start_date DATE;
+  new_end_date DATE;
+BEGIN
+  -- Determine the start date as the day after the max date in Date_dim
+  SELECT MAX(cal_date) + 1 INTO new_start_date FROM Date_dim;
+
+
+  -- Determine the end date as the current date
+  new_end_date := SYSDATE;
+
+
+  -- Ensure that there is a valid range of dates to process
+  IF new_start_date > new_end_date THEN
+    DBMS_OUTPUT.PUT_LINE('No new dates to load.');
+    RETURN;
+  END IF;
+
+
+  -- Loop through each date in the range and insert into Date_dim
+  WHILE (new_start_date <= new_end_date) LOOP
+    v_CAL_DATE := new_start_date;
+    v_FULL_DESC := TO_CHAR(new_start_date, 'DD') || ' Of ' ||
+                   TO_CHAR(new_start_date, 'Month') || ' ' ||
+                   TO_CHAR(new_start_date, 'Year');
+    v_DAY_OF_WEEK := TO_CHAR(new_start_date, 'D');
+    v_CAL_MONTH_YEAR := TO_CHAR(new_start_date, 'MM');
+    v_MONTH_NAME := TO_CHAR(new_start_date, 'Month');
+    v_CAL_QUARTER := 'Q' || TO_CHAR(new_start_date, 'Q');
+    v_CAL_YEAR := TO_CHAR(new_start_date, 'YYYY');
+    v_CAL_YEAR_MONTH := v_CAL_YEAR || '-' || v_CAL_MONTH_YEAR;
+    v_CAL_YEAR_QUARTER := v_CAL_YEAR || '-' || v_CAL_QUARTER;
+
+
+    -- Determine whether the date is a weekday or weekend
+    IF (v_DAY_OF_WEEK BETWEEN 2 AND 6) THEN
+      v_WEEKDAY_IND := 'Y';
+    ELSE 
+      v_WEEKDAY_IND := 'N';
+    END IF;
+
+
+    -- Insert data into Date_dim table
+    BEGIN
+      INSERT INTO Date_dim (
+        date_key,                   
+        cal_date,        
+        full_desc,         
+        day_of_week,                     
+        cal_month_year,
+        cal_year_month,                 
+        month_name,         -- Added month_name here
+        cal_quarter,
+        cal_year_quarter, 
+        cal_year,                
+        weekday_ind
+      ) VALUES (
+        date_seq.NEXTVAL,                  
+        v_CAL_DATE,        
+        v_FULL_DESC,         
+        v_DAY_OF_WEEK,                     
+        v_CAL_MONTH_YEAR,
+        v_CAL_YEAR_MONTH,                 
+        v_MONTH_NAME,         -- Insert month_name here
+        v_CAL_QUARTER,
+        v_CAL_YEAR_QUARTER, 
+        v_CAL_YEAR,                
+        v_WEEKDAY_IND
+      );
+    EXCEPTION
+      WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Error occurred while inserting data: ' || SQLERRM);
+        ROLLBACK;
+    END;
+
+
+    -- Increment the date by 1
+    new_start_date := new_start_date + 1;
+
+
+  END LOOP;
+
+
+  DBMS_OUTPUT.PUT_LINE('Subsequent ETL process completed successfully.');
+END;
+/
+
+
+-- Execute the procedure
+EXEC prc_subsequent_load_date_dim;
+
+--CHECK
+SELECT MAX(CAL_DATE) FROM DATE_DIM;
+
+-------------------------------------------------------------------------------------------------------------------------------
+                                                        CREATE SALESFACT TABLE
+—----------------------------------------------------------------------------------------------------------------------------
+
+DROP TABLE  SalesFact;
+CREATE TABLE SalesFact
+(
+  DATE_KEY                NUMBER    NOT NULL,
+  MENU_KEY                NUMBER    NOT NULL,
+  PROMO_KEY               NUMBER    NOT NULL,
+  CUSTOMER_KEY            NUMBER    NOT NULL,
+  ORDERID                 NUMBER    NOT NULL,
+  OrderTime               CHAR(5)   NOT NULL,
+  DeliveryCompanyName     VARCHAR(18) NOT NULL,
+  Quantity                NUMBER      NOT NULL,
+  UnitPrice                   NUMBER(4,2) NOT NULL,
+  Discount_Unit_Price     NUMBER(4,2) NOT NULL,
+  LineTotal               NUMBER(6,2) NOT NULL,
+  CONSTRAINT PK_FACT PRIMARY KEY (DATE_KEY, MENU_KEY, PROMO_KEY, CUSTOMER_KEY, ORDERID),
+  CONSTRAINT FK_DATE_KEY FOREIGN KEY (DATE_KEY) REFERENCES DATE_DIM,
+  CONSTRAINT FK_MENU_KEY FOREIGN KEY (MENU_KEY) REFERENCES MENU_DIM,
+  CONSTRAINT FK_PROMO_KEY FOREIGN KEY (PROMO_KEY) REFERENCES PROMOTION_DIM,
+  CONSTRAINT FK_CUST_KEY FOREIGN KEY (CUSTOMER_KEY) REFERENCES CUSTOMER_DIM
+);
+
+
+------------------------------------------------------------------------------------------------------------------------
+                                        INITIAL LOADING FOR SALESFACT
+------------------------------------------------------------------------------------------------------------------------
+
+
+INSERT INTO SalesFact
+SELECT   C.DATE_KEY,
+         D.MENU_KEY,
+         E.PROMO_KEY,
+         F.CUSTOMER_KEY,
+         A.ORDERID,
+         to_char(A.OrderDate,'hh24:mi'),
+         UPPER(G.CompanyName),
+         B.Quantity,
+         B.SellingPrice AS UnitPrice,
+         B.SellingPrice * (1-E.PromoPercentage) AS Discount_Unit_Price,
+         (B.SellingPrice * (1-E.PromoPercentage)) * QUANTITY AS LineTotal
+FROM NEW_ORDERS          A
+JOIN NEW_ORDERDETAILS    B   ON A.ORDERID = B.ORDERID
+JOIN DATE_DIM            C   ON (TRUNC(A.OrderDate) = TRUNC(C.Cal_date))
+JOIN MENU_DIM            D   ON B.menuID = D.menuID
+JOIN PROMOTION_DIM       E   ON A.PromoID = E.PromoID
+JOIN CUSTOMER_DIM        F   ON A.CustID = F.CustID
+JOIN DeliveryCompany     G   ON A.DeliveryID = G.CompanyID
+WHERE A.OrderDate between F.RowEffectiveDate AND F.RowExpirationDate
+;
+------------------------------------------------------------------------------------------------------------------------
+                                  SUBSEQUENT LOADING FOR SALESFACT
+------------------------------------------------------------------------------------------------------------------------
+
+DROP PROCEDURE INSERT_INTO_SALESFACT;
+
+CREATE OR REPLACE PROCEDURE INSERT_INTO_SALESFACT IS
+    v_rows_inserted NUMBER := 0;
+BEGIN
+    -- Step 1: Insert clean and valid data into SalesFact
+    INSERT INTO SalesFact
+    SELECT   C.DATE_KEY,
+             D.MENU_KEY,
+             E.PROMO_KEY,
+             F.CUSTOMER_KEY,
+             A.ORDERID,
+             TO_CHAR(A.OrderDate,'hh24:mi') AS OrderTime,
+             UPPER(G.CompanyName) AS DeliveryCompany,
+             B.Quantity,
+             B.SellingPrice AS UnitPrice,
+             CASE
+                 WHEN E.PromoPercentage IS NOT NULL THEN B.SellingPrice * (1-E.PromoPercentage)
+                 ELSE B.SellingPrice
+             END AS Discount_Unit_Price,
+             CASE
+                 WHEN E.PromoPercentage IS NOT NULL THEN (B.SellingPrice * (1-E.PromoPercentage)) * B.Quantity
+                 ELSE B.SellingPrice * B.Quantity
+             END AS LineTotal
+    FROM NEW_ORDERS          A
+    JOIN NEW_ORDERDETAILS    B   ON A.ORDERID = B.ORDERID
+    JOIN DATE_DIM            C   ON TRUNC(A.OrderDate) = TRUNC(C.Cal_date)
+    JOIN MENU_DIM            D   ON B.menuID = D.menuID
+    JOIN PROMOTION_DIM       E   ON A.PromoID = E.PromoID
+    JOIN CUSTOMER_DIM        F   ON A.CustID = F.CustID
+    JOIN DeliveryCompany     G   ON A.DeliveryID = G.CompanyID
+    WHERE A.OrderDate BETWEEN F.RowEffectiveDate AND F.RowExpirationDate
+    AND A.ORDERID NOT IN (SELECT ORDERID FROM SALESFACT)   -- Avoid duplicate orders
+    AND B.Quantity > 0                                    -- Ensure valid quantities
+    AND B.SellingPrice > 0                                -- Ensure valid prices
+    AND LENGTH(TRIM(D.menuName)) <= 40                    -- Ensure valid menu name length
+    AND LENGTH(TRIM(D.categoryName)) <= 15;               -- Ensure valid category name length
+
+    -- Step 2: Capture the number of rows inserted
+    v_rows_inserted := SQL%ROWCOUNT;
+
+    -- Step 3: Log the number of rows inserted
+    DBMS_OUTPUT.PUT_LINE(v_rows_inserted || ' row(s) successfully inserted into SalesFact.');
+    
+    -- Optional: Error logging and handling
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Error during SalesFact insertion: ' || SQLERRM);
+        ROLLBACK;  -- Rollback in case of errors
+END;
+/
+
+EXEC INSERT_INTO_SALESFACT

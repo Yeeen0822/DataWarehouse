@@ -1,0 +1,125 @@
+SET LINESIZE 80
+SET PAGESIZE 50
+
+-- Column Settings
+COLUMN Avg_Weekday_Sales FORMAT $9,999.99 HEADING 'AVG|WEEKDAY|SALES'
+COLUMN AVG_WEEKEND_SALES FORMAT $9,999.99 HEADING 'AVG|WEEKEND|SALES'
+COLUMN "WEEKEND-WEEKDAY_SALES" FORMAT $9,999.99 HEADING 'WEEKEND|-WEEKDAY|SALES|DIFF'
+COLUMN "WEEKEND-WEEKDAY_SALES(%)" FORMAT 999.99 HEADING 'WEEKEND|-WEEKDAY|SALES|DIFF(%)'
+COLUMN CATEGORYNAME FORMAT A12
+COLUMN TOTAL_SALES FORMAT $999,999.99
+COLUMN DAY_TYPE FORMAT A8
+COLUMN "Required_Sales_For_Uplift" FORMAT A25
+
+-- Prompt for promo ID and uplift percentage
+ACCEPT promo_id PROMPT 'Enter Promo ID: '
+ACCEPT uplift_percentage PROMPT 'Enter desired uplift percentage (e.g., 10 for 10%): '
+
+-- TOTAL REVENUE SALES
+-- DATA SET 1
+CREATE OR REPLACE VIEW Total_Revenue_Sales AS
+SELECT M.categoryName,
+       SUM(QUANTITY) AS QTY_SOLD,
+       SUM(linetotal) AS Total_Revenue
+FROM salesfact SF
+JOIN PROMOTION_DIM P ON SF.PROMO_KEY = P.PROMO_KEY
+JOIN date_dim D ON SF.date_key = D.date_key
+JOIN MENU_dim M ON SF.MENU_key = M.MENU_key
+WHERE P.PROMOID = &promo_id
+AND D.CAL_DATE BETWEEN P.PROMOSTARTDATE AND P.PROMOENDDATE
+GROUP BY M.categoryName
+ORDER BY M.categoryName, Total_Revenue DESC;
+
+-- WEEKDAY
+CREATE OR REPLACE VIEW WEEK_DAY_Sales AS
+SELECT M.categoryname, SUM(QUANTITY) AS WEEK_DAY_QTY, SUM(LINETOTAL) AS WEEK_DAY_SALES
+FROM SALESFACT SF
+JOIN PROMOTION_DIM P ON SF.PROMO_KEY = P.PROMO_KEY
+JOIN MENU_DIM M ON SF.MENU_KEY = M.MENU_KEY
+JOIN DATE_DIM D ON SF.DATE_KEY = D.DATE_KEY
+WHERE P.PROMOID = &promo_id
+AND D.CAL_DATE BETWEEN P.PROMOSTARTDATE AND P.PROMOENDDATE
+AND WEEKDAY_IND = 'Y'
+GROUP BY M.categoryname
+ORDER BY WEEK_DAY_SALES DESC;
+
+-- WEEKEND
+CREATE OR REPLACE VIEW WEEK_END_Sales AS
+SELECT M.categoryname, SUM(QUANTITY) AS WEEK_END_QTY, SUM(LINETOTAL) AS WEEK_END_SALES
+FROM SALESFACT SF
+JOIN PROMOTION_DIM P ON SF.PROMO_KEY = P.PROMO_KEY
+JOIN MENU_DIM M ON SF.MENU_KEY = M.MENU_KEY
+JOIN DATE_DIM D ON SF.DATE_KEY = D.DATE_KEY
+WHERE P.PROMOID = &promo_id
+AND D.CAL_DATE BETWEEN P.PROMOSTARTDATE AND P.PROMOENDDATE
+AND WEEKDAY_IND = 'N'
+GROUP BY M.categoryname
+ORDER BY WEEK_END_SALES DESC;
+
+-- COMBINE
+CREATE OR REPLACE VIEW Combined_Sales AS
+SELECT TRS.*,
+       WDS.week_day_SALES,
+       WDS.WEEK_DAY_QTY,
+       WES.week_End_SALES,
+       WES.WEEK_END_QTY
+FROM Total_Revenue_Sales TRS
+JOIN WEEK_DAY_Sales WDS ON TRS.categoryName = WDS.categoryName
+JOIN WEEK_END_Sales WES ON TRS.categoryName = WES.categoryName;
+
+-- PROMO DATES
+CREATE OR REPLACE VIEW PROMODATES AS
+SELECT
+        P.PROMOSTARTDATE,
+        P.PROMOENDDATE
+FROM PROMOTION_DIM P
+WHERE P.PROMOID = &promo_id;
+
+-- COUNT WEEKDAYS, WEEKENDS
+CREATE OR REPLACE VIEW NO_OF_DAYS AS
+SELECT
+        COUNT(CASE WHEN D.WEEKDAY_IND = 'Y' THEN 1 END) AS Num_Weekdays,
+        COUNT(CASE WHEN D.WEEKDAY_IND = 'N' THEN 1 END) AS Num_Weekends
+FROM DATE_DIM D
+JOIN PromoDates PD ON D.CAL_DATE BETWEEN PD.PROMOSTARTDATE AND PD.PROMOENDDATE;
+
+-- REPORT
+TTITLE ON
+TTITLE CENTER '=================================================================' SKIP 1 -
+       CENTER ' Weekend vs. Weekday Sales Performance During a Promotional Period ' SKIP 1 -
+       CENTER '=================================================================' SKIP 1 LEFT 'DATE: ' _DATE SKIP 1 LEFT  'PAGE: ' FORMAT 999 SQL.PNO SKIP 1
+
+
+SELECT 
+    TRS.categoryName,
+    WDS.week_day_SALES / NULLIF(NOD.Num_Weekdays, 0) AS Avg_Weekday_Sales,
+    WES.week_End_SALES / NULLIF(NOD.Num_Weekends, 0) AS Avg_Weekend_Sales,
+    (WES.week_End_SALES / NULLIF(NOD.Num_Weekends, 0)) - (WDS.week_day_SALES / NULLIF(NOD.Num_Weekdays, 0)) AS "Weekend-Weekday_Sales",
+    CASE 
+        WHEN WDS.week_day_SALES / NULLIF(NOD.Num_Weekdays, 0) = 0 THEN 0
+        ELSE ROUND((((WES.week_End_SALES / NULLIF(NOD.Num_Weekends, 0)) - (WDS.week_day_SALES / NULLIF(NOD.Num_Weekdays, 0))) / 
+              (WDS.week_day_SALES / NULLIF(NOD.Num_Weekdays, 0))) * 100,2)
+    END AS "Weekend-Weekday_Sales(%)",
+    CASE
+        WHEN ABS(ROUND((((WES.week_End_SALES / NULLIF(NOD.Num_Weekends, 0)) - (WDS.week_day_SALES / NULLIF(NOD.Num_Weekdays, 0))) / 
+              (WDS.week_day_SALES / NULLIF(NOD.Num_Weekdays, 0))) * 100,2)) >= 40
+        THEN 
+            CASE
+                WHEN (WDS.week_day_SALES / NULLIF(NOD.Num_Weekdays, 0)) < (WES.week_End_SALES / NULLIF(NOD.Num_Weekends, 0)) THEN 
+                    'Weekday:' || TO_CHAR(ROUND((WDS.week_day_SALES / NULLIF(NOD.Num_Weekdays, 0)) * (1 + 70 / 100), 2), '$9999.99')
+                ELSE 
+                    'Weekend:' || TO_CHAR(ROUND((WES.week_End_SALES / NULLIF(NOD.Num_Weekends, 0)) * (1 + 70 / 100), 2), '$9999.99')
+            END
+        ELSE 'N/A'
+    END AS "Required_Sales_For_Uplift"
+FROM 
+    Total_Revenue_Sales TRS
+JOIN 
+    WEEK_DAY_Sales WDS ON TRS.categoryName = WDS.categoryName
+JOIN 
+    WEEK_END_Sales WES ON TRS.categoryName = WES.categoryName
+JOIN 
+    NO_OF_DAYS NOD ON 1 = 1;
+
+CLEAR COLUMNS
+TTITLE OFF
